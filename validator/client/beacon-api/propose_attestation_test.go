@@ -273,6 +273,7 @@ func TestProposeAttestationElectra_Success(t *testing.T) {
 				sszBuf.Write(sszBytes)
 
 				headers := map[string]string{"Eth-Consensus-Version": consensusVersion}
+				expectPostSSZWithFallback(handler)
 				handler.EXPECT().PostSSZ(
 					gomock.Any(),
 					"/eth/v2/beacon/pool/attestations",
@@ -293,6 +294,7 @@ func TestProposeAttestationElectra_Success(t *testing.T) {
 				}
 
 				headers := map[string]string{"Eth-Consensus-Version": consensusVersion}
+				expectPostSSZWithFallback(handler)
 				handler.EXPECT().PostSSZ(
 					gomock.Any(),
 					"/eth/v2/beacon/pool/attestations",
@@ -310,6 +312,7 @@ func TestProposeAttestationElectra_Success(t *testing.T) {
 			attestations: []*ethpb.SingleAttestation{attestation1, attestation2},
 			setupMock: func(handler *mock.MockHandler) {
 				headers := map[string]string{"Eth-Consensus-Version": consensusVersion}
+				expectPostSSZWithFallback(handler)
 				handler.EXPECT().PostSSZ(
 					gomock.Any(),
 					"/eth/v2/beacon/pool/attestations",
@@ -332,6 +335,7 @@ func TestProposeAttestationElectra_Success(t *testing.T) {
 			name:         "bad request",
 			attestations: []*ethpb.SingleAttestation{attestation1},
 			setupMock: func(handler *mock.MockHandler) {
+				expectPostSSZWithFallback(handler)
 				handler.EXPECT().PostSSZ(
 					gomock.Any(),
 					"/eth/v2/beacon/pool/attestations",

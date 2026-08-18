@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
+	"fmt"
 
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/helpers"
-	"github.com/OffchainLabs/prysm/v7/network/httputil"
 	ethpb "github.com/OffchainLabs/prysm/v7/proto/prysm/v1alpha1"
 	"github.com/OffchainLabs/prysm/v7/runtime/version"
 	"github.com/OffchainLabs/prysm/v7/time/slots"
-	"github.com/pkg/errors"
 )
 
 // proposeAttestation submits pre-signed attestations of the same fork version in one request.
@@ -21,12 +19,12 @@ func (c *beaconApiValidatorClient) proposeAttestation(ctx context.Context, attes
 	}
 	for i, att := range attestations {
 		if err := helpers.ValidateNilAttestation(att); err != nil {
-			return nil, errors.Wrapf(err, "attestation at index %d is invalid", i)
+			return nil, fmt.Errorf("attestation at index %d is invalid: %w", i, err)
 		}
 	}
 	marshalledAttestations, err := json.Marshal(jsonifyAttestations(attestations))
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to marshal attestations")
+		return nil, fmt.Errorf("failed to marshal attestations: %w", err)
 	}
 	headers := map[string]string{"Eth-Consensus-Version": version.String(attestations[0].Version())}
 	if err := c.handler.Post(ctx, "/eth/v2/beacon/pool/attestations", headers, bytes.NewBuffer(marshalledAttestations), nil); err != nil {
@@ -34,7 +32,7 @@ func (c *beaconApiValidatorClient) proposeAttestation(ctx context.Context, attes
 	}
 	attestationDataRoot, err := attestations[0].Data.HashTreeRoot()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to compute attestation data root")
+		return nil, fmt.Errorf("failed to compute attestation data root: %w", err)
 	}
 	return &ethpb.AttestResponse{AttestationDataRoot: attestationDataRoot[:]}, nil
 }
@@ -47,39 +45,36 @@ func (c *beaconApiValidatorClient) proposeAttestationElectra(ctx context.Context
 	}
 	for i, att := range attestations {
 		if err := helpers.ValidateNilAttestation(att); err != nil {
-			return nil, errors.Wrapf(err, "attestation at index %d is invalid", i)
+			return nil, fmt.Errorf("attestation at index %d is invalid: %w", i, err)
 		}
 	}
 	attestation := attestations[0]
 	headers := map[string]string{"Eth-Consensus-Version": version.String(slots.ToForkVersion(attestation.Data.Slot))}
 
-	sszBytes := make([]byte, 0, attestation.SizeSSZ()*len(attestations))
-	for _, att := range attestations {
-		var err error
-		sszBytes, err = att.MarshalSSZTo(sszBytes)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to marshal attestations to SSZ")
+	sszFn := func() ([]byte, error) {
+		sszBytes := make([]byte, 0, attestation.SizeSSZ()*len(attestations))
+		for _, att := range attestations {
+			var err error
+			sszBytes, err = att.MarshalSSZTo(sszBytes)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal attestations to SSZ: %w", err)
+			}
 		}
+		return sszBytes, nil
 	}
-	err := c.handler.PostSSZ(ctx, "/eth/v2/beacon/pool/attestations", headers, bytes.NewBuffer(sszBytes))
-	if err != nil {
-		errJSON := &httputil.DefaultJsonError{}
-		if !errors.As(err, &errJSON) || errJSON.Code != http.StatusUnsupportedMediaType {
-			return nil, err
-		}
-		log.WithError(err).Debug("Beacon node does not accept SSZ attestations, falling back to JSON")
-
-		marshalledAttestations, err := json.Marshal(jsonifySingleAttestations(attestations))
+	jsonFn := func() ([]byte, error) {
+		b, err := json.Marshal(jsonifySingleAttestations(attestations))
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to marshal attestations")
+			return nil, fmt.Errorf("failed to marshal attestations: %w", err)
 		}
-		if err := c.handler.Post(ctx, "/eth/v2/beacon/pool/attestations", headers, bytes.NewBuffer(marshalledAttestations), nil); err != nil {
-			return nil, err
-		}
+		return b, nil
+	}
+	if err := c.handler.PostSSZWithFallback(ctx, "/eth/v2/beacon/pool/attestations", headers, sszFn, jsonFn); err != nil {
+		return nil, err
 	}
 	attestationDataRoot, err := attestation.Data.HashTreeRoot()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to compute attestation data root")
+		return nil, fmt.Errorf("failed to compute attestation data root: %w", err)
 	}
 	return &ethpb.AttestResponse{AttestationDataRoot: attestationDataRoot[:]}, nil
 }
