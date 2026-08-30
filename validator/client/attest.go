@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/OffchainLabs/go-bitfield"
+	"github.com/OffchainLabs/prysm/v7/api/server"
 	"github.com/OffchainLabs/prysm/v7/async"
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/signing"
 	"github.com/OffchainLabs/prysm/v7/config/features"
@@ -407,15 +408,41 @@ func (v *validator) SubmitAttestations(ctx context.Context, slot primitives.Slot
 
 // recordSubmittedAttestations applies a batch submission result to per-validator logging and metrics.
 func (v *validator) recordSubmittedAttestations(span otelTrace.Span, slot primitives.Slot, results []signedAtt, err error) {
+	if err == nil {
+		for _, res := range results {
+			if res.att != nil {
+				if recErr := v.recordSubmittedAttestation(span, slot, res.pubKey, res.att); recErr != nil {
+					v.recordAttestationFailure(span, slot, res.pubKey, recErr)
+				}
+			}
+		}
+		return
+	}
+
+	var indexedErr *server.IndexedErrorContainer
+	if errors.As(err, &indexedErr) && len(indexedErr.Failures) > 0 {
+		failedIndices := make(map[int]string, len(indexedErr.Failures))
+		for _, f := range indexedErr.Failures {
+			failedIndices[f.Index] = f.Message
+		}
+
+		for i, res := range results {
+			if res.att == nil {
+				continue
+			}
+			if failMsg, failed := failedIndices[i]; failed {
+				v.recordAttestationFailure(span, slot, res.pubKey, errors.New(failMsg))
+			} else {
+				if recErr := v.recordSubmittedAttestation(span, slot, res.pubKey, res.att); recErr != nil {
+					v.recordAttestationFailure(span, slot, res.pubKey, recErr)
+				}
+			}
+		}
+		return
+	}
+
 	for _, res := range results {
-		if res.att == nil {
-			continue
-		}
-		if err != nil {
-			v.recordAttestationFailure(span, slot, res.pubKey, err)
-			continue
-		}
-		if err := v.recordSubmittedAttestation(span, slot, res.pubKey, res.att); err != nil {
+		if res.att != nil {
 			v.recordAttestationFailure(span, slot, res.pubKey, err)
 		}
 	}

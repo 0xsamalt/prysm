@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/OffchainLabs/prysm/v7/api/server"
 	"github.com/OffchainLabs/prysm/v7/beacon-chain/core/helpers"
+	"github.com/OffchainLabs/prysm/v7/network/httputil"
 	ethpb "github.com/OffchainLabs/prysm/v7/proto/prysm/v1alpha1"
 	"github.com/OffchainLabs/prysm/v7/runtime/version"
 	"github.com/OffchainLabs/prysm/v7/time/slots"
@@ -28,7 +31,7 @@ func (c *beaconApiValidatorClient) proposeAttestation(ctx context.Context, attes
 	}
 	headers := map[string]string{"Eth-Consensus-Version": version.String(attestations[0].Version())}
 	if err := c.handler.Post(ctx, "/eth/v2/beacon/pool/attestations", headers, bytes.NewBuffer(marshalledAttestations), nil); err != nil {
-		return nil, err
+		return nil, parseIndexedError(err)
 	}
 	attestationDataRoot, err := attestations[0].Data.HashTreeRoot()
 	if err != nil {
@@ -70,11 +73,28 @@ func (c *beaconApiValidatorClient) proposeAttestationElectra(ctx context.Context
 		return b, nil
 	}
 	if err := c.handler.PostSSZWithFallback(ctx, "/eth/v2/beacon/pool/attestations", headers, sszFn, jsonFn); err != nil {
-		return nil, err
+		return nil, parseIndexedError(err)
 	}
 	attestationDataRoot, err := attestation.Data.HashTreeRoot()
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute attestation data root: %w", err)
 	}
 	return &ethpb.AttestResponse{AttestationDataRoot: attestationDataRoot[:]}, nil
+}
+
+func parseIndexedError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var indexedErr server.IndexedErrorContainer
+	var defaultJsonErr *httputil.DefaultJsonError
+	if errors.As(err, &defaultJsonErr) {
+		if json.Unmarshal([]byte(defaultJsonErr.Message), &indexedErr) == nil && len(indexedErr.Failures) > 0 {
+			return &indexedErr
+		}
+	}
+	if json.Unmarshal([]byte(err.Error()), &indexedErr) == nil && len(indexedErr.Failures) > 0 {
+		return &indexedErr
+	}
+	return err
 }
